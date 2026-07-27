@@ -202,7 +202,10 @@ def open_readonly(db_path: Path) -> sqlite3.Connection:
 
 def fetch_messages(conn: sqlite3.Connection, match: str, since_rowid: int) -> list[dict]:
     """Return real messages (no reactions/tapbacks, no system events) for chats
-    whose display_name contains `match`, newer than `since_rowid`, oldest first."""
+    whose display_name OR chat_identifier contains `match`, newer than
+    `since_rowid`, oldest first. Group chats carry a display_name ("Wacky
+    Wednesday"); 1:1 chats have no name, so they match on chat_identifier (the
+    handle, e.g. a phone number)."""
     rows = conn.execute(
         """
         SELECT m.ROWID              AS rowid,
@@ -216,13 +219,14 @@ def fetch_messages(conn: sqlite3.Connection, match: str, since_rowid: int) -> li
         JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
         JOIN message m             ON m.ROWID = cmj.message_id
         LEFT JOIN handle h         ON m.handle_id = h.ROWID
-        WHERE c.display_name LIKE '%' || ? || '%'
+        WHERE (c.display_name    LIKE '%' || ? || '%'
+            OR c.chat_identifier LIKE '%' || ? || '%')
           AND m.ROWID > ?
           AND m.associated_message_type = 0   -- exclude reactions/tapbacks
           AND m.item_type = 0                 -- exclude system events
         ORDER BY m.date ASC, m.ROWID ASC
         """,
-        (match, since_rowid),
+        (match, match, since_rowid),
     ).fetchall()
     cols = ("rowid", "date", "text", "attributed_body", "is_from_me",
             "has_attachment", "sender")

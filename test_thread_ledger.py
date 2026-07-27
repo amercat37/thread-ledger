@@ -30,7 +30,7 @@ def make_db(messages):
     conn = sqlite3.connect(":memory:")
     conn.executescript(
         """
-        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT);
+        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT, chat_identifier TEXT);
         CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
         CREATE TABLE message (
             ROWID INTEGER PRIMARY KEY, date INTEGER, text TEXT,
@@ -38,7 +38,7 @@ def make_db(messages):
             associated_message_type INTEGER, item_type INTEGER, handle_id INTEGER
         );
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
-        INSERT INTO chat VALUES (1, '2026 Wacky Wednesday');
+        INSERT INTO chat VALUES (1, '2026 Wacky Wednesday', 'chat000000000');
         """
     )
     handle_ids = {}
@@ -159,6 +159,23 @@ def test_fetch_match_is_substring():
     conn = make_db([{"rowid": 1, "date": 1, "text": "hi", "sender": "+1555"}])
     assert len(tl.fetch_messages(conn, "Wacky Wednesday", 0)) == 1
     assert len(tl.fetch_messages(conn, "Taco Tuesday", 0)) == 0
+
+
+def test_fetch_matches_one_on_one_by_handle():
+    # A 1:1 chat has no display_name; it matches on chat_identifier (the handle).
+    conn = make_db([{"rowid": 1, "date": 1, "text": "hi", "sender": "+1555"}])
+    conn.execute(
+        "INSERT INTO chat VALUES (2, '', ?)", ("+15555550111",))
+    conn.execute("INSERT INTO handle VALUES (99, '+15555550111')")
+    conn.execute(
+        "INSERT INTO message VALUES (10,1,'yo',NULL,0,0,0,0,99)")
+    conn.execute("INSERT INTO chat_message_join VALUES (2, 10)")
+    conn.commit()
+    # Matches by the phone handle, and only that message (not the group's).
+    got = tl.fetch_messages(conn, "+15555550111", 0)
+    assert [m["rowid"] for m in got] == [10]
+    # A phone-number match must not false-match the group's chat_identifier.
+    assert len(tl.fetch_messages(conn, "+19998887777", 0)) == 0
 
 
 # --------------------------------------------------------------------------- #
