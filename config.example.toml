@@ -1,0 +1,36 @@
+# thread-ledger configuration
+#
+# Copy this file to config.toml (which is gitignored) and edit for your setup.
+#   cp config.example.toml config.toml
+
+# Where the generated markdown files are written. During testing this can be a
+# local folder; in production point it at the "Text Messages" folder inside your
+# LOCAL Obsidian vault so LiveSync carries the files to the server:
+#   output_dir = "/Users/you/Documents/Obsidian/My Vault/Text Messages"
+output_dir = "./output"
+
+# IANA timezone used to render timestamps (chat.db stores UTC).
+timezone = "America/New_York"
+
+# Label used for your own (is_from_me) messages. Rendered like any other name.
+me = "Your Name"
+
+# Path to the Messages database. Rarely needs changing.
+chat_db = "~/Library/Messages/chat.db"
+
+# One [[threads]] block per group chat to collect.
+#   name  -> output filename ("<name>.md") and the frontmatter group label
+#   match -> substring matched against the chat's display name (survives yearly
+#            renames, e.g. "2026 Wacky Wednesday" and "2027 Wacky Wednesday")
+[[threads]]
+name = "Wacky Wednesday"
+match = "Wacky Wednesday"
+# Optional: override the frontmatter `topics` for this thread. Defaults to
+# ["Text Messages", "iMessage", <name>] if omitted.
+# topics = ["Text Messages", "iMessage", "Wacky Wednesday"]
+
+# Manual name overrides. These win over Contacts, so use them for nicknames or
+# for numbers that aren't in your address book. Everything else is resolved from
+# macOS Contacts automatically and cached in contacts_cache.json.
+[contacts]
+# "+15551234567" = "Aunt Sue"

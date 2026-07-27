@@ -1,0 +1,14 @@
+# Local config + generated data (personal / PII — never commit)
+config.toml
+contacts_cache.json
+state.json
+/output/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store

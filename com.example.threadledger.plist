@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Rename to com.<you>.threadledger.plist and place in
+         ~/Library/LaunchAgents/ -->
+    <key>Label</key>
+    <string>com.example.threadledger</string>
+
+    <!-- Use a stable python3 that ships tomllib (3.11+). On python.org installs
+         /usr/local/bin/python3 is a maintained symlink. This is the exact binary
+         you must grant Full Disk Access to (see the README). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3</string>
+        <string>/ABSOLUTE/PATH/TO/thread-ledger/thread_ledger.py</string>
+        <string>--quiet</string>
+    </array>
+
+    <!-- Run every 90 minutes. launchd only fires while the Mac is awake and
+         coalesces missed fires into a single catch-up run on wake. -->
+    <key>StartInterval</key>
+    <integer>5400</integer>
+
+    <!-- Also run once shortly after login. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/thread-ledger.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/thread-ledger.err</string>
+</dict>
+</plist>
