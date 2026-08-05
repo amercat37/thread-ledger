@@ -122,6 +122,8 @@ and `state.json` contain personal data (numbers, names, message content) and are
 gitignored — only the `.example` files are committed. PII handling for the vault
 itself is done by the memory-vault pipeline, not here.
 
+Only archive conversations that you are authorized to store and process, and follow applicable privacy requirements and workplace policies.
+
 ## Architecture
 
 A single script, `thread_ledger.py`:
@@ -167,6 +169,4 @@ messages. The venv is for tests only — the runtime needs no dependencies.
 
 ## About this project
 
-thread-ledger is a companion to my **memory-vault** project — a sibling to
-**echo-ledger** (which does the same for audio transcripts). Like echo-ledger, it
-was built almost entirely by Claude with minimal human direction.
+Thread Ledger is a companion to my memory-vault project and a sibling to Echo Ledger, which performs the same role for audio transcripts. I defined the project’s purpose, data flow, privacy boundaries, incremental archival behavior, and integration requirements, then developed the implementation with assistance from Claude Code.
