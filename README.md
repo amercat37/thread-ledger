@@ -50,7 +50,7 @@ append only what's new.
 | `timezone` | IANA timezone for rendering timestamps (the database stores UTC). |
 | `me` | Name used for your own messages. |
 | `chat_db` | Path to the Messages database (rarely changed). |
-| `[[threads]]` | One block per group chat: `name` (output filename) and `match` (substring of the chat's display name — survives yearly renames). |
+| `[[threads]]` | One block per group chat: `name` (output filename) and `match` (substring of the chat's display name — survives yearly renames). Optional `topics` overrides the frontmatter topics; optional `skip_pii = true` writes `skip_pii: true` into the frontmatter. |
 | `[contacts]` | Optional `"+1…" = "Name"` overrides that win over Contacts. |
 
 ### Name resolution
@@ -150,11 +150,17 @@ State lives in `contacts_cache.json` (resolved names) and `state.json`
 
 ### PII scanning
 
-These files are left for the memory-vault pipeline to scan for PII like any other
-note — `skip_pii: true` is intentionally **not** set in the frontmatter, since
-group chats are exactly where an address or phone number can slip in. The per-year
-split keeps that nightly scan bounded (only the current year's file changes, and
-past years are scanned once then frozen).
+By default these files are left for the memory-vault pipeline to scan for PII like
+any other note — nothing is written into the frontmatter, since group chats are
+exactly where an address or phone number can slip in. The per-year split keeps that
+nightly scan bounded (only the current year's file changes, and past years are
+scanned once then frozen).
+
+Set `skip_pii = true` in a thread's `[[threads]]` block to opt that thread out, which
+writes `skip_pii: true` into its frontmatter for the pipeline to read. It has to be
+set here rather than edited into the note by hand: the frontmatter is regenerated
+from scratch every time new messages are appended, so a manual edit is silently
+discarded on the next run.
 
 ## Tests
 

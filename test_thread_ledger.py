@@ -264,10 +264,10 @@ def _yfile(tmp_path, year=2026):
     return tmp_path / "Wacky Wednesday" / f"Wacky Wednesday - {year}.md"
 
 
-def _run(conn, tmp_path, state, rebuild=False):
+def _run(conn, tmp_path, state, rebuild=False, **thread_opts):
     resolver = tl.NameResolver(overrides={}, cache={})
     resolver._ab = {"5555550111": "Alice Adams", "5555550122": "Bob Baker"}
-    thread = {"name": "Wacky Wednesday", "match": "Wacky Wednesday"}
+    thread = {"name": "Wacky Wednesday", "match": "Wacky Wednesday", **thread_opts}
     return tl.process_thread(thread, conn, resolver, _cfg(tmp_path), state, NY,
                              rebuild, lambda m: None)
 
@@ -371,6 +371,40 @@ def test_frontmatter_has_topics_and_attendees(tmp_path):
     fm_block = _yfile(tmp_path).read_text().split("---")[1]   # the frontmatter block
     assert "topics: Text Messages, iMessage, Wacky Wednesday" in fm_block
     assert "Alice Adams" in fm_block and "Test User" in fm_block   # attendees present
+
+
+def test_skip_pii_absent_by_default(tmp_path):
+    conn = make_db([{"rowid": 1, "date": apple_ns(datetime(2026, 1, 6, 12, 0, tzinfo=NY)),
+                     "text": "hi", "sender": "+15555550111"}])
+    _run(conn, tmp_path, {})
+    assert "skip_pii" not in _yfile(tmp_path).read_text()
+
+
+def test_skip_pii_written_when_configured(tmp_path):
+    conn = make_db([{"rowid": 1, "date": apple_ns(datetime(2026, 1, 6, 12, 0, tzinfo=NY)),
+                     "text": "hi", "sender": "+15555550111"}])
+    _run(conn, tmp_path, {}, skip_pii=True)
+    fm_block = _yfile(tmp_path).read_text().split("---")[1]
+    assert "skip_pii: true" in fm_block
+    # the other keys are still there
+    assert "topics: " in fm_block and "attendees: " in fm_block
+
+
+def test_skip_pii_survives_an_incremental_append(tmp_path):
+    # The frontmatter is regenerated on every append, so the flag has to be
+    # re-emitted rather than inherited from the file on disk.
+    conn = make_db([{"rowid": 1, "date": apple_ns(datetime(2026, 1, 6, 12, 0, tzinfo=NY)),
+                     "text": "one", "sender": "+15555550111"}])
+    state = {}
+    _run(conn, tmp_path, state, skip_pii=True)
+    conn.execute("INSERT INTO message VALUES (?,?,?,?,?,?,?,?,?)",
+                 (2, apple_ns(datetime(2026, 1, 7, 9, 0, tzinfo=NY)), "two", None, 0, 0, 0, 0, 1))
+    conn.execute("INSERT INTO chat_message_join VALUES (1, 2)")
+    conn.commit()
+    assert _run(conn, tmp_path, state, skip_pii=True) is True
+    out = _yfile(tmp_path).read_text()
+    assert out.split("---")[1].count("skip_pii: true") == 1
+    assert "one" in out and "two" in out
 
 
 def test_attendees_accumulate_across_runs(tmp_path):
