@@ -28,6 +28,12 @@ match = "Wacky Wednesday"
 # Optional: override the frontmatter `topics` for this thread. Defaults to
 # ["Text Messages", "iMessage", <name>] if omitted.
 # topics = ["Text Messages", "iMessage", "Wacky Wednesday"]
+#
+# Optional: write `skip_pii: true` into this thread's frontmatter, which tells
+# the memory-vault pipeline not to run its PII scan over the note. Defaults to
+# false (scan on) and nothing is written unless you set it. Leave it off for
+# group chats, where an address or phone number can slip in.
+# skip_pii = true
 
 # Manual name overrides. These win over Contacts, so use them for nicknames or
 # for numbers that aren't in your address book. Everything else is resolved from

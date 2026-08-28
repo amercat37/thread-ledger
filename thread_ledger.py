@@ -252,15 +252,21 @@ def message_text(row: dict) -> str | None:
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
-def frontmatter(topics: list[str], attendees: list[str]) -> str:
+def frontmatter(topics: list[str], attendees: list[str],
+                skip_pii: bool = False) -> str:
     # `topics` and `attendees` are the only frontmatter keys memory-vault embeds
     # into every chunk, so those are all we emit — they make the thread findable
     # by group and by participant even when a chunk doesn't name them.
+    # `skip_pii` is the exception: memory-vault reads it to skip the nightly PII
+    # scan for this note. Written only when true, so the default (scan on) leaves
+    # every existing file's frontmatter unchanged.
     lines = []
     if topics:
         lines.append("topics: " + ", ".join(topics))
     if attendees:
         lines.append("attendees: " + ", ".join(attendees))
+    if skip_pii:
+        lines.append("skip_pii: true")
     if not lines:
         return ""
     return "---\n" + "\n".join(lines) + "\n---\n"
@@ -330,6 +336,7 @@ def process_thread(thread: dict, conn: sqlite3.Connection, resolver: NameResolve
         years_state[y] = v if isinstance(v, dict) else {"last_date": v, "attendees": []}
 
     topics = thread.get("topics", ["Text Messages", "iMessage", name])
+    skip_pii = bool(thread.get("skip_pii", False))
 
     if rebuild and thread_dir.exists():
         for stale in thread_dir.glob(f"{name} - *.md"):
@@ -372,7 +379,7 @@ def process_thread(thread: dict, conn: sqlite3.Connection, resolver: NameResolve
         body = "\n".join(new_lines) if not existing_body \
             else existing_body + "\n" + "\n".join(new_lines)
         out_file.write_text(
-            frontmatter(topics, attendees) + "\n" + body + "\n",
+            frontmatter(topics, attendees, skip_pii) + "\n" + body + "\n",
             encoding="utf-8")
         years_state[ykey] = {"last_date": last_date, "attendees": attendees}
         wrote_any = True
