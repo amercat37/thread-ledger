@@ -4,7 +4,7 @@
 Reads the local Messages database (~/Library/Messages/chat.db), filters to the
 group threads named in config.toml, resolves phone numbers to names (manual
 overrides -> cache -> macOS Contacts -> raw number), and appends any new
-messages to a per-thread markdown file. Runtime uses the standard library only
+messages to per-year markdown files (<name>/<name> - <year>.md). Runtime uses the standard library only
 so it can run unattended under launchd with no venv.
 
 Usage:
@@ -13,7 +13,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -61,10 +63,25 @@ def load_json(path: Path) -> dict:
     return {}
 
 
+def atomic_write(path: Path, text: str) -> None:
+    """Write `text` to `path` so readers only ever see the old or the new file,
+    never a half-written one (LiveSync may pick a file up at any moment). The
+    temp file is a dotfile in the same folder: Obsidian ignores dotfiles, and
+    os.replace is only atomic within one filesystem."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
 def save_json(path: Path, data: dict) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, ensure_ascii=False, sort_keys=True)
-        fh.write("\n")
+    atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 # --------------------------------------------------------------------------- #
@@ -88,6 +105,10 @@ def norm_key(raw: str | None) -> str:
     numbers, or the lowercased raw value for emails / short codes."""
     if not raw:
         return ""
+    if "@" in raw:
+        # Emails can contain 10+ digits ("jo1234567890@…"); never treat them
+        # as phone numbers.
+        return raw.strip().lower()
     digits = re.sub(r"\D", "", raw)
     if len(digits) >= 10:
         return digits[-10:]
@@ -101,34 +122,39 @@ def addressbook_dbs() -> list[Path]:
     return [p for p in dbs if p.exists()]
 
 
-def build_addressbook_map() -> dict[str, str]:
+# Phone numbers and email addresses on Contacts cards. iMessage handles are
+# one or the other, so both are looked up.
+_AB_QUERIES = (
+    "SELECT p.ZFULLNUMBER, {name} FROM ZABCDPHONENUMBER p "
+    "JOIN ZABCDRECORD r ON p.ZOWNER = r.Z_PK WHERE p.ZFULLNUMBER IS NOT NULL",
+    "SELECT e.ZADDRESS, {name} FROM ZABCDEMAILADDRESS e "
+    "JOIN ZABCDRECORD r ON e.ZOWNER = r.Z_PK WHERE e.ZADDRESS IS NOT NULL",
+)
+_AB_NAME_COLS = ("COALESCE(r.ZFIRSTNAME, ''), COALESCE(r.ZLASTNAME, ''), "
+                 "COALESCE(r.ZORGANIZATION, '')")
+
+
+def build_addressbook_map(dbs: list[Path] | None = None) -> dict[str, str]:
     """Map norm_key -> full name from every Contacts database."""
     result: dict[str, str] = {}
-    for db in addressbook_dbs():
+    for db in addressbook_dbs() if dbs is None else dbs:
         try:
-            conn = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
+            conn = open_readonly(db)
         except sqlite3.Error:
             continue
+        rows = []
         try:
-            rows = conn.execute(
-                """
-                SELECT p.ZFULLNUMBER,
-                       COALESCE(r.ZFIRSTNAME, ''),
-                       COALESCE(r.ZLASTNAME, ''),
-                       COALESCE(r.ZORGANIZATION, '')
-                FROM ZABCDPHONENUMBER p
-                JOIN ZABCDRECORD r ON p.ZOWNER = r.Z_PK
-                WHERE p.ZFULLNUMBER IS NOT NULL
-                """
-            ).fetchall()
-        except sqlite3.Error:
-            rows = []
+            for query in _AB_QUERIES:
+                try:
+                    rows += conn.execute(query.format(name=_AB_NAME_COLS)).fetchall()
+                except sqlite3.Error:
+                    continue  # table missing in this source; use what we have
         finally:
             conn.close()
-        for number, first, last, org in rows:
+        for handle, first, last, org in rows:
             name = " ".join(part for part in (first.strip(), last.strip()) if part)
             name = name or org.strip()
-            key = norm_key(number)
+            key = norm_key(handle)
             if key and name and key not in result:
                 result[key] = name
     return result
@@ -195,9 +221,14 @@ def decode_attributed_body(blob: bytes | None) -> str | None:
 # Messages DB
 # --------------------------------------------------------------------------- #
 def open_readonly(db_path: Path) -> sqlite3.Connection:
-    """Open the Messages DB read-only + immutable so we never block or disturb
-    the live database (which Messages keeps open in WAL mode)."""
-    return sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
+    """Open a live database (Messages, Contacts) read-only.
+
+    Plain read-only mode, not `immutable=1`: these files change constantly, and
+    immutable tells SQLite they never do — it then skips the write-ahead log
+    (so recent messages show up a run late) and can read pages mid-checkpoint
+    (garbled rows or "malformed" errors). In WAL mode a reader never blocks the
+    writer, so Messages is not disturbed either way."""
+    return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10)
 
 
 def fetch_messages(conn: sqlite3.Connection, match: str, since_rowid: int) -> list[dict]:
@@ -239,6 +270,9 @@ def message_text(row: dict) -> str | None:
     if not text:
         text = decode_attributed_body(row["attributed_body"])
     if text:
+        # Some senders' line breaks arrive as \r\n or a bare \r. Normalize so a
+        # stray \r never lands in the markdown.
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         text = text.replace(OBJ_REPLACEMENT, "").strip()
     if text:
         if REACTION_RE.match(text):
@@ -274,7 +308,7 @@ def frontmatter(topics: list[str], attendees: list[str],
 
 def render_lines(messages: list[dict], resolver: NameResolver, me: str,
                  tz: ZoneInfo, start_date: str | None) -> tuple[list[str], str | None]:
-    """Render messages to markdown lines, emitting a `## YYYY-MM-DD (Ddd)` heading
+    """Render messages to markdown lines, emitting a `### YYYY-MM-DD (Ddd)` heading
     whenever the date changes. `start_date` is the last date already written to the
     file so we don't repeat a heading across runs. Returns (lines, last_date)."""
     lines: list[str] = []
@@ -305,6 +339,11 @@ def render_lines(messages: list[dict], resolver: NameResolver, me: str,
 # --------------------------------------------------------------------------- #
 # Per-thread processing
 # --------------------------------------------------------------------------- #
+# A day heading exactly as render_lines writes it. Used to find where a late
+# message belongs in an existing file.
+HEADING_RE = re.compile(r"^### (\d{4}-\d{2}-\d{2}) \([A-Za-z]{3}\)$")
+
+
 def split_frontmatter(content: str) -> str:
     """Return the body of an existing markdown file, dropping any frontmatter."""
     if content.startswith("---\n"):
@@ -319,77 +358,182 @@ def year_file(out_root: Path, name: str, year: int) -> Path:
     return out_root / name / f"{name} - {year}.md"
 
 
+def read_raw(path: Path) -> str:
+    """Read a file exactly as stored (no newline translation)."""
+    with open(path, "r", encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def insert_late(body: list[str], day: str, heading: str,
+                msg_lines: list[str]) -> list[str]:
+    """Put messages from an earlier `day` into the right place in `body`.
+
+    They go at the end of that day's section if it exists; otherwise a new
+    section is created just before the first later day."""
+    sections = [(i, m.group(1)) for i, line in enumerate(body)
+                if (m := HEADING_RE.match(line))]
+    for k, (start, d) in enumerate(sections):
+        if d == day:
+            end = sections[k + 1][0] if k + 1 < len(sections) else len(body)
+            while end > start + 1 and body[end - 1] == "":
+                end -= 1  # stay above the blank line before the next heading
+            return body[:end] + msg_lines + body[end:]
+    for start, d in sections:
+        if d > day:
+            block = [heading] + msg_lines + [""]
+            if start > 0 and body[start - 1] != "":
+                block = [""] + block
+            return body[:start] + block + body[start:]
+    # Not before any existing day (not expected for a late message): append.
+    return body + ([""] if body else []) + [heading] + msg_lines
+
+
+def written_years(pending: dict | None, out_root: Path, name: str) -> dict[str, dict]:
+    """Years that an interrupted earlier run already wrote.
+
+    Before writing any file, a run records in state.json a hash of what each
+    file will contain. If a file on disk matches its hash, that write landed
+    and its messages must not be added again."""
+    done: dict[str, dict] = {}
+    for ykey, info in ((pending or {}).get("years") or {}).items():
+        path = year_file(out_root, name, int(ykey))
+        if path.exists() and sha256(read_raw(path)) == info.get("sha"):
+            done[ykey] = info
+    return done
+
+
 def process_thread(thread: dict, conn: sqlite3.Connection, resolver: NameResolver,
                    cfg: dict, state: dict, tz: ZoneInfo, rebuild: bool,
-                   log) -> bool:
+                   log, save=None) -> bool:
+    """Append a thread's new messages to its per-year files.
+
+    `save()` persists `state`; it is called before files are written (to record
+    what is about to be written) and again after, so a run stopped at any point
+    never adds the same messages twice."""
     name = thread["name"]
     match = thread.get("match", name)
+    me = cfg["me"]
     out_root = Path(cfg["output_dir"]).expanduser()
-    thread_dir = out_root / name
+    save = save or (lambda: None)
 
-    tstate = {} if rebuild else state.get(name, {})
-    since = int(tstate.get("last_rowid", 0))
+    committed = dict(state.get(name, {}))
+    pending = committed.pop("pending", None)
     # Normalize per-year state to {"last_date", "attendees"} (older state stored
     # just the date string).
     years_state: dict[str, dict] = {}
-    for y, v in (tstate.get("years", {}) or {}).items():
+    for y, v in (committed.get("years", {}) or {}).items():
         years_state[y] = v if isinstance(v, dict) else {"last_date": v, "attendees": []}
+
+    done = written_years(pending, out_root, name)
+    done_upto = int(pending.get("last_rowid", 0)) if done else 0
+    for ykey, info in done.items():
+        years_state[ykey] = info["state"]
 
     topics = thread.get("topics", ["Text Messages", "iMessage", name])
     skip_pii = bool(thread.get("skip_pii", False))
 
-    if rebuild and thread_dir.exists():
-        for stale in thread_dir.glob(f"{name} - *.md"):
-            stale.unlink()
-
-    messages = fetch_messages(conn, match, since)
-    if not messages:
+    since = 0 if rebuild else int(committed.get("last_rowid", 0))
+    fetched = fetch_messages(conn, match, since)
+    if not fetched:
         log(f"  {name}: no new messages (watermark ROWID {since})")
         return False
 
     # Watermark = highest ROWID seen. ROWID (insertion order) and date (send
     # time) can diverge, so never use the last message in date order for this.
-    max_rowid = max(m["rowid"] for m in messages)
+    max_rowid = max(m["rowid"] for m in fetched)
+
+    def day_of(m: dict) -> datetime:
+        return apple_to_datetime(m["date"], tz)
 
     # Route each message to its calendar year (local time). Only the year(s)
-    # with new messages get rewritten; earlier years stay frozen.
+    # with new messages get rewritten; earlier years stay frozen. Skip messages
+    # an interrupted run already wrote (unless rebuilding from scratch).
     by_year: dict[int, list[dict]] = {}
-    for m in messages:
-        by_year.setdefault(apple_to_datetime(m["date"], tz).year, []).append(m)
+    for m in fetched:
+        year = day_of(m).year
+        if not rebuild and str(year) in done and m["rowid"] <= done_upto:
+            continue
+        by_year.setdefault(year, []).append(m)
 
-    thread_dir.mkdir(parents=True, exist_ok=True)
-    wrote_any = False
+    # Build every file's new content in memory first.
+    writes: dict[str, tuple[Path, str, dict, int]] = {}
     for year in sorted(by_year):
         ykey = str(year)
-        yinfo = years_state.get(ykey, {"last_date": None, "attendees": []})
+        batch = by_year[year]
         out_file = year_file(out_root, name, year)
-        existing_body = ""
-        if out_file.exists():
-            existing_body = split_frontmatter(out_file.read_text(encoding="utf-8")).rstrip("\n")
-        new_lines, last_date = render_lines(
-            by_year[year], resolver, cfg["me"], tz, yinfo.get("last_date"))
-        if not new_lines:
-            continue
-        # Merge attendees: everyone already recorded for the year + this batch's
-        # senders (so a frozen file's roster survives incremental appends).
-        names = set(yinfo.get("attendees", []))
-        for m in by_year[year]:
-            names.add(cfg["me"] if m["is_from_me"] else resolver.resolve(m["sender"]))
-        attendees = sorted(names)
-        body = "\n".join(new_lines) if not existing_body \
-            else existing_body + "\n" + "\n".join(new_lines)
-        out_file.write_text(
-            frontmatter(topics, attendees, skip_pii) + "\n" + body + "\n",
-            encoding="utf-8")
-        years_state[ykey] = {"last_date": last_date, "attendees": attendees}
-        wrote_any = True
-        log(f"  {name} {year}: {'rebuilt' if rebuild else 'updated'} "
-            f"(+{len(by_year[year])} msg) -> {out_file}")
+        body: list[str] = []
+        if rebuild:
+            yinfo = {"last_date": None, "attendees": []}
+        else:
+            yinfo = years_state.get(ykey, {"last_date": None, "attendees": []})
+            if out_file.exists():
+                existing = split_frontmatter(
+                    out_file.read_text(encoding="utf-8")).rstrip("\n")
+                body = existing.split("\n") if existing else []
+        last_date = yinfo.get("last_date")
+        changed = False
 
+        # Messages from a day already written (they arrived late) go into that
+        # day's section instead of after everything else.
+        late: dict[str, list[dict]] = {}
+        current: list[dict] = []
+        for m in batch:
+            day = day_of(m).strftime("%Y-%m-%d")
+            if body and last_date and day < last_date:
+                late.setdefault(day, []).append(m)
+            else:
+                current.append(m)
+        for day in sorted(late):
+            lines, _ = render_lines(late[day], resolver, me, tz, day)
+            if lines:
+                heading = f"### {day_of(late[day][0]).strftime('%Y-%m-%d (%a)')}"
+                body = insert_late(body, day, heading, lines)
+                changed = True
+
+        new_lines, new_last = render_lines(current, resolver, me, tz, last_date)
+        if new_lines:
+            if body and new_lines[0].startswith("### "):
+                body.append("")  # blank line before a new day, as on a fresh run
+            body += new_lines
+            last_date = new_last
+            changed = True
+        if not changed:
+            continue
+
+        # Attendees: everyone already recorded for the year + whoever actually
+        # said something in this batch (so a frozen file's roster survives
+        # incremental appends, and a reaction alone doesn't count).
+        names = set(yinfo.get("attendees", []))
+        for m in batch:
+            if message_text(m) is not None:
+                names.add(me if m["is_from_me"] else resolver.resolve(m["sender"]))
+        attendees = sorted(names)
+        text = frontmatter(topics, attendees, skip_pii) + "\n" + "\n".join(body) + "\n"
+        writes[ykey] = (out_file, text, {"last_date": last_date, "attendees": attendees},
+                        len(batch))
+
+    if writes:
+        # 1) Record what is about to be written. Years an earlier interrupted
+        #    run wrote stay listed until this run commits.
+        intent = {k: v for k, v in done.items() if k not in writes}
+        for ykey, (_, text, ystate, _) in writes.items():
+            intent[ykey] = {"sha": sha256(text), "state": ystate}
+        state[name] = {**committed, "pending": {"last_rowid": max_rowid, "years": intent}}
+        save()
+        # 2) Write the files (each one atomically).
+        (out_root / name).mkdir(parents=True, exist_ok=True)
+        for ykey, (out_file, text, ystate, count) in sorted(writes.items()):
+            atomic_write(out_file, text)
+            years_state[ykey] = ystate
+            log(f"  {name} {ykey}: {'rebuilt' if rebuild else 'updated'} "
+                f"(+{count} msg) -> {out_file}")
+    else:
+        log(f"  {name}: {len(fetched)} row(s) had no renderable text")
+
+    # 3) Commit: new watermark, no pending writes.
     state[name] = {"last_rowid": max_rowid, "years": years_state}
-    if not wrote_any:
-        log(f"  {name}: {len(messages)} row(s) had no renderable text")
-    return wrote_any
+    save()
+    return bool(writes)
 
 
 # --------------------------------------------------------------------------- #
@@ -431,16 +575,25 @@ def main(argv: list[str] | None = None) -> int:
             "System Settings > Privacy & Security > Full Disk Access, then retry."
         )
         return 2
+    except sqlite3.DatabaseError as exc:
+        log(f"ERROR: {db_path} is not a readable Messages database ({exc}).")
+        return 2
+    def save() -> None:
+        # Saved after every thread, so a run stopped partway keeps the progress
+        # of the threads it finished.
+        save_json(CACHE_PATH, cache)
+        save_json(STATE_PATH, state)
+
     changed = False
     try:
         for thread in cfg.get("threads", []):
-            if process_thread(thread, conn, resolver, cfg, state, tz, args.rebuild, log):
+            if process_thread(thread, conn, resolver, cfg, state, tz, args.rebuild, log,
+                              save=save):
                 changed = True
     finally:
         conn.close()
 
-    save_json(CACHE_PATH, cache)
-    save_json(STATE_PATH, state)
+    save()
     log("done" + ("" if changed else " (nothing to write)"))
     return 0
 

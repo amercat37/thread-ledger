@@ -46,7 +46,7 @@ append only what's new.
 
 | Key | Meaning |
 | --- | --- |
-| `output_dir` | Where `<thread>.md` is written. Point at the `Text Messages` folder in your **local** Obsidian vault for production. |
+| `output_dir` | Where each thread's folder (`<thread>/<thread> - <year>.md`) is written. Point at the `Text Messages` folder in your **local** Obsidian vault for production. |
 | `timezone` | IANA timezone for rendering timestamps (the database stores UTC). |
 | `me` | Name used for your own messages. |
 | `chat_db` | Path to the Messages database (rarely changed). |
@@ -111,9 +111,16 @@ chunks, and embeds it on its usual nightly schedule.
 python3 thread_ledger.py --rebuild
 ```
 
-Wipes each thread file and its watermark and regenerates from the database. Use
-it after changing a name mapping or the output format. Safe whenever your
-Messages retention is set to "Keep Messages: Forever".
+Regenerates each thread's year files from the database. Use it after changing a
+name mapping or the output format.
+
+Rebuild only replaces years the database still has messages for: if Messages has
+nothing for a thread, or has pruned an earlier year, those files are left alone.
+A year that Messages has only *partly* pruned would be rebuilt from what's left,
+so only rebuild when your Messages retention is "Keep Messages: Forever".
+
+Every rewritten file is re-embedded by the vault pipeline, so rebuild costs a
+full re-embed of the threads it touches.
 
 ## Privacy note
 
@@ -128,22 +135,30 @@ Only archive conversations that you are authorized to store and process, and fol
 
 A single script, `thread_ledger.py`:
 
-- **Read** — opens `chat.db` read-only/immutable (so it never blocks Messages),
-  filters to the configured threads by display-name substring, and excludes
+- **Read** — opens `chat.db` in plain read-only mode (a reader never blocks
+  Messages, and it sees messages still in the write-ahead log), filters to the configured threads by display-name substring, and excludes
   reactions/tapbacks (`associated_message_type = 0`) and system events
   (`item_type = 0`). Messages whose `text` is NULL are recovered from the archived
   `attributedBody` blob.
-- **Resolve** — maps handles to names via overrides → cache → Contacts → raw.
+- **Resolve** — maps handles (phone numbers or emails) to names via overrides →
+  cache → Contacts → raw.
 - **Render** — groups by date, emits `**Name** (time): text` lines, renders
   attachment-only messages as `[attachment]`. Each file's frontmatter carries
   `topics` (`Text Messages, iMessage, <thread>`) and `attendees` (the resolved
   participant names) — the two keys memory-vault embeds into every chunk, so the
-  thread is findable by group and by participant. The attendee roster accumulates
-  in `state.json` so it stays complete across incremental appends.
+  thread is findable by group and by participant. Only people who actually said
+  something count (a reaction alone doesn't). The roster accumulates in
+  `state.json` so it stays complete across incremental appends.
 - **Append** — a per-thread watermark (last message ROWID) in `state.json` means
   each run adds only new messages, keyed by ROWID so there are no duplicates. Each
   message is routed to a per-year file (`<thread> - <year>.md`); only years that
-  received new messages are rewritten.
+  received new messages are rewritten. A message that arrives late (dated before
+  the last day already written) is inserted under its own day, not appended.
+- **Write safely** — each file is written to a temporary dotfile and swapped in,
+  so LiveSync never sees a half-written note. Before writing, a run records in
+  `state.json` what each file will contain; if the run is stopped partway, the
+  next run sees which files landed and neither duplicates nor drops messages.
+  Progress is saved after every thread.
 
 State lives in `contacts_cache.json` (resolved names) and `state.json`
 (watermarks + the last date written per year).
