@@ -19,7 +19,7 @@ me = "Your Name"
 chat_db = "~/Library/Messages/chat.db"
 
 # One [[threads]] block per group chat to collect.
-#   name  -> output filename ("<name>.md") and the frontmatter group label
+#   name  -> output filename ("<name>/<name> - <year>.md") and the frontmatter group label
 #   match -> substring matched against the chat's display name (survives yearly
 #            renames, e.g. "2026 Wacky Wednesday" and "2027 Wacky Wednesday")
 [[threads]]
