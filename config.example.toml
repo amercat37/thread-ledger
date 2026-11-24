@@ -2,6 +2,11 @@
 #
 # Copy this file to config.toml (which is gitignored) and edit for your setup.
 #   cp config.example.toml config.toml
+#
+# Before the first real run, preview what would be saved (changes nothing):
+#   python3 thread_ledger.py --list-chats          # group chats
+#   python3 thread_ledger.py --list-chats --all    # ...and one-on-one chats
+# The list shows every chat's ID, ready to paste into this file.
 
 # Where the generated markdown files are written. During testing this can be a
 # local folder; in production point it at the "Text Messages" folder inside your
@@ -18,22 +23,72 @@ me = "Your Name"
 # Path to the Messages database. Rarely needs changing.
 chat_db = "~/Library/Messages/chat.db"
 
-# One [[threads]] block per group chat to collect.
-#   name  -> output filename ("<name>/<name> - <year>.md") and the frontmatter group label
-#   match -> substring matched against the chat's display name (survives yearly
-#            renames, e.g. "2026 Wacky Wednesday" and "2027 Wacky Wednesday")
+# --------------------------------------------------------------------------- #
+# Saving group chats automatically (off unless you turn it on)
+# --------------------------------------------------------------------------- #
+# When on, any group chat that passes ALL the rules below is saved, with its
+# full history, the first time it qualifies. One-on-one chats are never saved
+# automatically — list them under [[threads]].
+#
+# A group that has been saved stays saved, even if it later stops passing the
+# rules. Groups you list under [[threads]] are always saved, whatever the rules.
+# auto_groups = true
+
+# Rules for new groups (defaults shown):
+# min_messages = 3              # at least this many messages
+# active_within_days = 365      # a message within this many days
+# require_known_contact = true  # at least one person in it is in your Contacts
+#                               # (skips scam and mass texts from strangers)
+
+# Chat IDs (from --list-chats) never to save. Stops a saved chat too; its files
+# are kept.
+# exclude = ["chat123456789012345678"]
+
+# Ignore messages before this date ("YYYY-MM-DD"). Blank = keep everything.
+# Applies to every chat. Lowering it later needs a --rebuild to pick up the
+# older messages.
+# start_date = "2020-01-01"
+
+# Default for every saved chat: write `skip_pii: true` into its notes, which
+# tells the memory-vault pipeline not to run its PII scan. Default false (scan
+# on). A [[threads]] entry can override it.
+# skip_pii = false
+
+# --------------------------------------------------------------------------- #
+# Chats to always save
+# --------------------------------------------------------------------------- #
+# One [[threads]] block per chat (or per set of chats to keep in one folder).
+#   chats          -> chat IDs from --list-chats. A one-on-one chat's ID is the
+#                     person's number or email. List several IDs to keep
+#                     several chats in one folder (they stay together after).
+#   name           -> optional folder name. Without it, a named group uses its
+#                     own name (and follows renames), an unnamed group is named
+#                     after its people ("Alice & Bob & Carol +9"), and a
+#                     one-on-one uses the person's name from Contacts.
+#   follow_renames -> optional; false keeps the folder name when the group is
+#                     renamed in Messages. Renaming a folder re-embeds its notes.
+#   topics         -> optional frontmatter topics; default
+#                     ["Text Messages", "iMessage", <folder name>].
+#   skip_pii       -> optional; overrides the top-level skip_pii.
+#
+# Adding an entry for a group that is already saved (to name it, say) keeps its
+# history; the folder is simply renamed.
 [[threads]]
 name = "Wacky Wednesday"
-match = "Wacky Wednesday"
-# Optional: override the frontmatter `topics` for this thread. Defaults to
-# ["Text Messages", "iMessage", <name>] if omitted.
-# topics = ["Text Messages", "iMessage", "Wacky Wednesday"]
+chats = ["chat123456789012345678"]
+
+# [[threads]]
+# chats = ["+15551234567"]          # a one-on-one chat
 #
-# Optional: write `skip_pii: true` into this thread's frontmatter, which tells
-# the memory-vault pipeline not to run its PII scan over the note. Defaults to
-# false (scan on) and nothing is written unless you set it. Leave it off for
-# group chats, where an address or phone number can slip in.
+# [[threads]]
+# name = "Book Club"
+# chats = ["chat111111111111111111", "chat222222222222222222"]   # two chats, one folder
 # skip_pii = true
+
+# Older configs found a chat by name instead of ID; that still works:
+#   match = "Wacky Wednesday"  -> a group whose name contains this, or a chat
+#                                 whose ID is exactly this (a number or email).
+# With neither chats nor match, `name` is used as match.
 
 # Manual name overrides. These win over Contacts, so use them for nicknames or
 # for numbers that aren't in your address book. Everything else is resolved from
