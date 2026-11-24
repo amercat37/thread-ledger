@@ -271,9 +271,11 @@ A single script, `thread_ledger.py`:
   `[attachment]` when the kind isn't known. Link previews get no label. Each file's frontmatter carries
   `topics` (`Text Messages, iMessage, <folder>`) and `attendees` (the resolved
   participant names) — the two keys memory-vault embeds into every chunk, so the
-  chat is findable by group and by participant. Only people who actually said
-  something count (a reaction alone doesn't). The roster accumulates in
-  `state.json` so it stays complete across incremental appends.
+  chat is findable by group and by participant. Attendees are you, everyone who
+  wrote that year, and — in the chat's latest year — everyone currently in it,
+  even if they haven't written. People in Contacts appear by name, everyone else
+  by number or email. The roster accumulates in `state.json` so it stays
+  complete across incremental appends.
 - **Append** — a watermark per chat (last message ROWID) in `state.json` means
   each run adds only new messages, keyed by ROWID so there are no duplicates. Each
   message is routed to a per-year file (`<folder> - <year>.md`); only years that

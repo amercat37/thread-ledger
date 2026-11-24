@@ -1115,6 +1115,11 @@ def sync_thread(thread: Thread, conn: sqlite3.Connection, resolver: NameResolver
             continue
         by_year.setdefault(year, []).append(m)
 
+    # The chat's current members are listed in its latest year's notes.
+    last_seen = max([c.last for c in thread.chats if c.last]
+                    + [apple_ns(m["date"]) for m in fetched], default=0)
+    latest_year = apple_to_datetime(last_seen, tz).year if last_seen else None
+
     # Build every file's new content in memory first.
     writes: dict[str, tuple[Path, str, dict, int]] = {}
     for year in sorted(by_year):
@@ -1160,13 +1165,16 @@ def sync_thread(thread: Thread, conn: sqlite3.Connection, resolver: NameResolver
         if not changed:
             continue
 
-        # Attendees: everyone already recorded for the year + whoever actually
-        # said something in this batch (so a frozen file's roster survives
-        # incremental appends, and a reaction alone doesn't count).
-        names = set(yinfo.get("attendees", []))
+        # Attendees: you, everyone already recorded for the year, whoever said
+        # something in this batch, and — in the chat's latest year — everyone
+        # currently in it, even if they haven't written. People not in
+        # Contacts appear as their number or email.
+        names = set(yinfo.get("attendees", [])) | {me}
         for m in batch:
             if message_text(m) is not None:
                 names.add(me if m["is_from_me"] else resolver.resolve(m["sender"]))
+        if year == latest_year:
+            names.update(resolver.resolve(h) for c in thread.chats for h in c.members)
         attendees = sorted(names)
         text = frontmatter(topics, attendees, thread.skip_pii) + "\n" + "\n".join(body) + "\n"
         writes[ykey] = (out_file, text, {"last_date": last_date, "attendees": attendees},

@@ -789,23 +789,65 @@ def test_attendees_accumulate_across_runs(tmp_path):
     conn = make_db(_msgs((1, D(2026, 1, 6, 12, 0), "one")))
     state = {}
     _run(conn, tmp_path, state)
-    assert _ts(state)["years"]["2026"]["attendees"] == ["Alice Adams"]
+    assert _ts(state)["years"]["2026"]["attendees"] == ["Alice Adams", "Test User"]
     add_msg(conn, 2, D(2026, 1, 7, 9, 0), "two", BOB)
     _run(conn, tmp_path, state)
-    assert _ts(state)["years"]["2026"]["attendees"] == ["Alice Adams", "Bob Baker"]
-    assert "Bob Baker" in _yfile(tmp_path).read_text().split("---")[1]
+    assert _ts(state)["years"]["2026"]["attendees"] == ["Alice Adams", "Bob Baker", "Test User"]
+    assert "attendees: Alice Adams, Bob Baker, Test User\n" in _yfile(tmp_path).read_text()
 
 
-def test_reaction_only_sender_is_not_an_attendee(tmp_path):
+def test_attendees_include_silent_members_unknown_numbers_and_you(tmp_path):
+    # Like a group where only one person wrote: everyone in it is listed, the
+    # ones not in Contacts by number, and you even though you didn't write.
+    conn = make_db([])
+    add_chat(conn, 2, "", "chat2", members=[ALICE, "+15555550198", "+15555550199"])
+    add_msg(conn, 1, D(2026, 10, 23, 9, 0), "hello", ALICE, chat=2)
+    _run_cfg(conn, _cfg(tmp_path, [{"chats": ["chat2"]}]), {})
+    assert "attendees: +15555550198, +15555550199, Alice Adams, Test User\n" in \
+        _yfile(tmp_path, name="Alice +2").read_text()
+
+
+def test_attendees_one_on_one(tmp_path):
+    conn = make_db([])
+    add_chat(conn, 2, "", CAROL, style=tl.STYLE_ONE_ON_ONE, members=[CAROL])
+    add_msg(conn, 1, D(2026, 1, 6, 9, 0), "mine", None, chat=2, is_from_me=1)
+    _run_cfg(conn, _cfg(tmp_path, [{"chats": [CAROL]}]), {})
+    assert "attendees: Carol Chen, Test User\n" in _yfile(tmp_path, name="Carol Chen").read_text()
+
+
+def test_attendees_members_only_in_the_latest_year(tmp_path):
+    # Older years list who wrote that year (and you), not today's members.
+    conn = make_db([])
+    add_chat(conn, 2, "Club", "chat2", members=[ALICE, CAROL])
+    add_msg(conn, 1, D(2025, 6, 1, 9, 0), "last year", BOB, chat=2)
+    add_msg(conn, 2, D(2026, 6, 1, 9, 0), "this year", ALICE, chat=2)
+    conn.execute("DELETE FROM chat_handle_join WHERE handle_id = ?", (handle_id(conn, BOB),))
+    conn.commit()                                     # Bob has left
+    _run_cfg(conn, _cfg(tmp_path, [{"chats": ["chat2"]}]), {})
+    assert "attendees: Bob Baker, Test User\n" in _yfile(tmp_path, 2025, "Club").read_text()
+    assert "attendees: Alice Adams, Carol Chen, Test User\n" in \
+        _yfile(tmp_path, 2026, "Club").read_text()
+
+
+def test_attendees_your_own_other_number_is_you(tmp_path):
+    conn = make_db(_msgs((1, D(2026, 1, 6, 9, 0), "hi")))
+    conn.execute("INSERT INTO chat_handle_join VALUES (1, ?)", (handle_id(conn, DAVE),))
+    conn.commit()
+    _run(conn, tmp_path, {}, resolver=_resolver({**CONTACTS, "5555550144": "Test User"}))
+    assert "attendees: Alice Adams, Test User\n" in _yfile(tmp_path).read_text()
+
+
+def test_reaction_only_sender_who_left_is_not_an_attendee(tmp_path):
     conn = make_db([
         {"rowid": 1, "date": D(2026, 1, 6, 12, 0), "text": "hi", "sender": ALICE},
         {"rowid": 2, "date": D(2026, 1, 6, 12, 1), "text": "Loved an image", "sender": BOB},
         {"rowid": 3, "date": D(2026, 1, 6, 12, 2), "text": None, "sender": "+15555550199"},
     ])
+    conn.execute("DELETE FROM chat_handle_join WHERE handle_id != ?", (handle_id(conn, ALICE),))
+    conn.commit()
     state = {}
     _run(conn, tmp_path, state)
-    assert _ts(state)["years"]["2026"]["attendees"] == ["Alice Adams"]
-    assert "attendees: Alice Adams\n" in _yfile(tmp_path).read_text()
+    assert _ts(state)["years"]["2026"]["attendees"] == ["Alice Adams", "Test User"]
 
 
 # --------------------------------------------------------------------------- #
