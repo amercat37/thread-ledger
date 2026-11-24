@@ -1,8 +1,16 @@
 # Local config + generated data (personal / PII — never commit)
 config.toml
+config.*.toml
+!config.example.toml
+*.toml.bak
 contacts_cache.json
 state.json
+state.*.json
+*.backup.json
 /output/
+# Temp files from atomic writes (e.g. .state.json.tmp) and renames
+.*.tmp
+.*.renaming
 
 # Python
 .venv/
